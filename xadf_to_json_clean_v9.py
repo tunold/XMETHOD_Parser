@@ -33,7 +33,7 @@ def element_to_dict(elem):
 
 # ---------- Safe Parser ----------
 def parse_xadf_safe(root):
-    """Completely fault-tolerant XADF parser with debug-friendly structure."""
+    """Completely fault-tolerant XADF parser with extended metadata extraction."""
     parsed = {
         "Info": {},
         "MeasurementParameters": {},
@@ -50,29 +50,50 @@ def parse_xadf_safe(root):
             parsed["_errors"].append(str(e))
             return {}
 
+    # --- Info section ---
     try:
-        # --- Info ---
-        info = safe_get_dict(root.find(".//ClassInstance[@Type='TXS2_XADFMgr_Info']"))
-        if info: parsed["Info"] = info
+        info_block = root.find(".//ClassInstance[@Type='TXS2_XADFMgr_Info']")
+        if info_block is not None:
+            info_dict = safe_get_dict(info_block)
+            parsed["Info"] = info_dict
+
+            # Extract key fields from Info
+            info_data = info_dict.get("Info", info_dict)
+            parsed["InfoExtracted"] = {
+                "SpectrumProcessingType": info_data.get("SpectrumProcessingType"),
+                "AnalysisMethod": info_data.get("AnalysisMethod"),
+                "ModifyDate": info_data.get("ModifyDate"),
+                "ModifyDateSerialData": info_data.get("ModifyDateSerialData"),
+                "CalibDate": info_data.get("CalibDate"),
+                "CalibDateSerialData": info_data.get("CalibDateSerialData")
+            }
     except Exception as e:
         parsed["_errors"].append(f"Info section: {e}")
 
+    # --- Measurement parameters ---
     try:
-        # --- Measurement parameters ---
         m = root.find(".//ClassInstance[@Type='TXS2_XADFMgr_MParam']")
         if m is not None:
             mdata = safe_get_dict(m)
             mp = mdata.get("MParam", mdata)
             z = mp.get("TubeZ")
-            if z and z.isdigit(): mp["TubeElement"] = ELEMENTS.get(int(z), "?")
+            if z and z.isdigit():
+                mp["TubeElement"] = ELEMENTS.get(int(z), "?")
             atm = mp.get("Atmosphere")
-            if atm in ATMOSPHERE_MAP: mp["AtmosphereName"] = ATMOSPHERE_MAP[atm]
+            if atm in ATMOSPHERE_MAP:
+                mp["AtmosphereName"] = ATMOSPHERE_MAP[atm]
             parsed["MeasurementParameters"] = mp
+
+            # Extract UnitType and DetectorType
+            parsed["MeasurementMeta"] = {
+                "UnitType": mp.get("UnitType"),
+                "DetectorType": mp.get("DetectorType")
+            }
     except Exception as e:
         parsed["_errors"].append(f"Measurement parameters: {e}")
 
+    # --- Calculation parameters ---
     try:
-        # --- Calculation parameters ---
         calc = root.find(".//ClassInstance[@Type='TXS2_XADFMgr_CalcParam']")
         if calc is not None:
             cdata = safe_get_dict(calc)
@@ -80,7 +101,7 @@ def parse_xadf_safe(root):
     except Exception as e:
         parsed["_errors"].append(f"Calculation parameters: {e}")
 
-    # --- Elements ---
+    # --- Elements (same as before) ---
     try:
         elements = []
         for e in root.findall(".//ClassInstance[@Type='TXS2_XADFMgr_SingleElement']"):
@@ -90,13 +111,11 @@ def parse_xadf_safe(root):
             if not isinstance(se,dict): continue
             z = se.get("Z")
             if z and z.isdigit(): se["ElementSymbol"]=ELEMENTS.get(int(z),"?")
-            # Extract PE_Spc_Number
             pe_num=None
             for v in se.values():
                 if isinstance(v,dict) and "PE_Spc_Number" in v:
                     pe_num=v["PE_Spc_Number"]; break
             se["PE_Spc_Number"]=pe_num or "?"
-            # Translate lines
             for v in se.values():
                 if isinstance(v,dict) and "UsedLines" in v:
                     v["EmissionLines"]=translate_used_lines(v["UsedLines"])
@@ -105,7 +124,7 @@ def parse_xadf_safe(root):
     except Exception as e:
         parsed["_errors"].append(f"Elements: {e}")
 
-    # --- Layers ---
+    # --- Layers (same as before) ---
     try:
         layers=[]
         for i,lyr in enumerate(root.findall(".//ClassInstance[@Type='TXS2_XADFMgr_SingleLayer']"),1):
@@ -123,8 +142,7 @@ def parse_xadf_safe(root):
                 if key.startswith("Element_") and isinstance(val,dict):
                     gi=val.get("GlobalElementIndex")
                     ei=None
-                    try:
-                        ei=parsed["Elements"][int(gi)]
+                    try: ei=parsed["Elements"][int(gi)]
                     except Exception: ei={}
                     sym=ei.get("ElementSymbol","?")
                     conc=val.get("StartConcentration","?")
@@ -145,6 +163,7 @@ def parse_xadf_safe(root):
         parsed["_errors"].append(f"Layers: {e}")
 
     return parsed
+
 
 # ---------- STREAMLIT APP ----------
 st.set_page_config(page_title="Bruker XMethod XADF Viewer", layout="wide")
@@ -179,18 +198,34 @@ if uploaded:
         sample=info.get("APLName","Unknown Sample")
         st.header(f"📄 Sample: {sample}")
 
-        with st.expander("⚙️ Measurement Conditions",expanded=True):
-            c1,c2=st.columns(2)
+        with st.expander("⚙️ Measurement Conditions", expanded=True):
+            c1, c2 = st.columns(2)
             with c1:
-                st.write(f"**Tube Element:** {mp.get('TubeElement','?')} (Z={mp.get('TubeZ','?')})")
-                st.write(f"**Voltage (kV):** {mp.get('HV') or mp.get('TubeVoltage','?')}")
-                st.write(f"**Current (µA):** {mp.get('Current') or mp.get('TubeCurrent','?')}")
-                st.write(f"**Measurement Time (s):** {mp.get('Time','?')}")
+                st.write(f"**Tube Element:** {mp.get('TubeElement', '?')} (Z={mp.get('TubeZ', '?')})")
+                st.write(f"**Voltage (kV):** {mp.get('HV') or mp.get('TubeVoltage', '?')}")
+                st.write(f"**Current (µA):** {mp.get('Current') or mp.get('TubeCurrent', '?')}")
+                st.write(f"**Measurement Time (s):** {mp.get('Time', '?')}")
             with c2:
-                st.write(f"**Number of Detectors:** {mp.get('NumberOfDetectors','?')}")
-                st.write(f"**Spot Size:** {mp.get('Collimator',{}).get('Description','?')}")
-                st.write(f"**Atmosphere:** {mp.get('AtmosphereName','?')}")
-                st.write(f"**Primary Spectrum (PrimarySpc):** {mp.get('PrimarySpc','?')}")
+                st.write(f"**Number of Detectors:** {mp.get('NumberOfDetectors', '?')}")
+                st.write(f"**Spot Size:** {mp.get('Collimator', {}).get('Description', '?')}")
+                st.write(f"**Atmosphere:** {mp.get('AtmosphereName', '?')}")
+                st.write(f"**Primary Spectrum (PrimarySpc):** {mp.get('PrimarySpc', '?')}")
+
+            # --- Additional metadata section ---
+            st.markdown("#### 🧩 Additional Metadata")
+            meta = parsed.get("MeasurementMeta", {})
+            info_ext = parsed.get("InfoExtracted", {})
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**UnitType:** {meta.get('UnitType', '?')}")
+                st.write(f"**DetectorType:** {meta.get('DetectorType', '?')}")
+                st.write(f"**SpectrumProcessingType:** {info_ext.get('SpectrumProcessingType', '?')}")
+                st.write(f"**AnalysisMethod:** {info_ext.get('AnalysisMethod', '?')}")
+            with col2:
+                st.write(f"**ModifyDate:** {info_ext.get('ModifyDate', '?')}")
+                st.write(f"**CalibDate:** {info_ext.get('CalibDate', '?')}")
+                st.write(f"**ModifyDateSerialData:** {info_ext.get('ModifyDateSerialData', '?')}")
+                st.write(f"**CalibDateSerialData:** {info_ext.get('CalibDateSerialData', '?')}")
 
         st.subheader("🧱 Layer Structure")
         for L in parsed.get("Layers",[]):
