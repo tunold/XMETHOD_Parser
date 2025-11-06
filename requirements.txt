@@ -1,0 +1,13 @@
+# Core Streamlit app
+streamlit>=1.32.0
+
+# Data handling and visualization
+pandas>=2.2.0
+plotly>=5.20.0
+
+# XML parsing (built-in xml.etree.ElementTree used, no extra lib needed)
+# But lxml is faster and more robust if you prefer it
+lxml>=5.1.0
+
+# Optional: JSON formatting and validation helpers
+jsonschema>=4.21.0
